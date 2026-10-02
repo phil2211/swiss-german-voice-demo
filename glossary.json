@@ -1,0 +1,22 @@
+[
+  { "swiss": "Velo", "german": "Fahrrad" },
+  { "swiss": "Natel", "german": "Handy" },
+  { "swiss": "Znüni", "german": "Vormittagsimbiss" },
+  { "swiss": "Zvieri", "german": "Nachmittagsimbiss" },
+  { "swiss": "poschte", "german": "einkaufen" },
+  { "swiss": "parkieren", "german": "parken" },
+  { "swiss": "grillieren", "german": "grillen" },
+  { "swiss": "Trottoir", "german": "Gehweg" },
+  { "swiss": "Glace", "german": "Eis" },
+  { "swiss": "Rüebli", "german": "Karotte" },
+  { "swiss": "Poulet", "german": "Huhn" },
+  { "swiss": "Billet", "german": "Fahrkarte" },
+  { "swiss": "Peperoni", "german": "Paprika" },
+  { "swiss": "Coiffeur", "german": "Friseur" },
+  { "swiss": "Pneu", "german": "Reifen" },
+  { "swiss": "Tram", "german": "Strassenbahn" },
+  { "swiss": "Camion", "german": "Lastwagen" },
+  { "swiss": "Trottinett", "german": "Tretroller" },
+  { "swiss": "Konfitüre", "german": "Marmelade" },
+  { "swiss": "Güggeli", "german": "Hähnchen" }
+]

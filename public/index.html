@@ -1,0 +1,55 @@
+<!DOCTYPE html>
+<html lang="de">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Schweizerdeutsch zu Hochdeutsch</title>
+    <link rel="stylesheet" href="/style.css" />
+  </head>
+  <body>
+    <main>
+      <header>
+        <p class="kicker">Grok Voice</p>
+        <h1>Schweizerdeutsch zu Hochdeutsch</h1>
+        <p class="lead">
+          Taste halten, sprechen, loslassen. Das Transkript bleibt stehen, das Glossar zeigt
+          Treffer, danach kommt der hochdeutsche Satz.
+        </p>
+      </header>
+
+      <button id="talk" type="button">Halten und sprechen</button>
+      <p id="status" role="status">Bereit</p>
+
+      <section>
+        <h2>Transkript</h2>
+        <p id="raw" class="panel">—</p>
+      </section>
+
+      <section>
+        <h2>Glossar</h2>
+        <ul id="matches">
+          <li class="empty">Keine Treffer</li>
+        </ul>
+      </section>
+
+      <section>
+        <h2>Hochdeutsch</h2>
+        <p id="german" class="panel">—</p>
+      </section>
+
+      <section class="try">
+        <h2>Ohne Mikrofon</h2>
+        <form id="text-form">
+          <label for="text-input">Satz ausprobieren</label>
+          <textarea
+            id="text-input"
+            rows="3"
+            placeholder="Ich gang mit em Velo go poschte."
+          ></textarea>
+          <button type="submit">Übersetzen</button>
+        </form>
+      </section>
+    </main>
+    <script src="/app.js" type="module"></script>
+  </body>
+</html>
