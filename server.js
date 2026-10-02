@@ -12,7 +12,7 @@ dotenv.config();
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const PUBLIC_DIR = path.join(__dirname, "public");
 const PORT = Number(process.env.PORT || 3000);
-const TEXT_MODEL = process.env.XAI_TEXT_MODEL || "grok-4.5";
+const TEXT_MODEL = process.env.XAI_TEXT_MODEL || "grok-4.20-non-reasoning";
 const glossary = loadGlossary(path.join(__dirname, "glossary.json"));
 const keyterms = selectKeyterms(glossary);
 
@@ -84,7 +84,7 @@ function serveStatic(req, res) {
       return;
     }
     const type = MIME_TYPES[path.extname(filePath)] || "application/octet-stream";
-    res.writeHead(200, { "Content-Type": type }).end(data);
+    res.writeHead(200, { "Content-Type": type, "Cache-Control": "no-store" }).end(data);
   });
 }
 
@@ -121,6 +121,11 @@ function attachSession(client) {
   const maxQueuedAudioBytes = 960_000;
   let rewriteSeq = 0;
   let closed = false;
+
+  const sessionId = Math.random().toString(36).slice(2, 8);
+  let audioBytes = 0;
+  let loggedFirstAudio = false;
+  console.log(`[${sessionId}] client connected, opening STT stream`);
 
   const upstream = new WebSocket(sttUrl(), {
     headers: { Authorization: `Bearer ${process.env.XAI_API_KEY}` },
@@ -161,6 +166,7 @@ function attachSession(client) {
 
     if (event.type === "transcript.created") {
       upstreamReady = true;
+      console.log(`[${sessionId}] STT ready`);
       flushUpstream();
       send(client, { type: "status", state: "ready" });
       return;
@@ -175,6 +181,10 @@ function attachSession(client) {
         speechFinal: Boolean(event.speech_final),
       });
 
+      if (event.speech_final) {
+        console.log(`[${sessionId}] utterance (${audioBytes} audio bytes so far): ${JSON.stringify(text)}`);
+      }
+
       if (event.speech_final && text.trim()) {
         const seq = ++rewriteSeq;
         const raw = text.trim();
@@ -183,15 +193,18 @@ function attachSession(client) {
           german: entry.german.trim(),
         }));
         send(client, { type: "utterance", seq, raw, matches, german: null });
+        const startedAt = Date.now();
         rewriteToGerman(raw, glossary, {
           apiKey: process.env.XAI_API_KEY,
           model: TEXT_MODEL,
         })
           .then((german) => {
+            console.log(`rewrite #${seq} ok in ${Date.now() - startedAt} ms`);
             if (seq !== rewriteSeq) return;
             send(client, { type: "utterance", seq, raw, matches, german });
           })
           .catch((error) => {
+            console.error(`rewrite #${seq} failed after ${Date.now() - startedAt} ms:`, error.message);
             if (seq !== rewriteSeq) return;
             send(client, {
               type: "error",
@@ -203,6 +216,7 @@ function attachSession(client) {
     }
 
     if (event.type === "error") {
+      console.error(`[${sessionId}] STT error:`, event.message);
       send(client, {
         type: "error",
         message: event.message || "Spracherkennung fehlgeschlagen",
@@ -210,11 +224,13 @@ function attachSession(client) {
     }
   });
 
-  upstream.on("error", () => {
+  upstream.on("error", (error) => {
+    console.error(`[${sessionId}] STT connection error:`, error.message);
     send(client, { type: "error", message: "Verbindung zur Spracherkennung unterbrochen" });
   });
 
-  upstream.on("close", () => {
+  upstream.on("close", (code, reason) => {
+    console.log(`[${sessionId}] STT closed (${code} ${reason?.toString() || ""}), ${audioBytes} audio bytes received`);
     send(client, { type: "status", state: "closed" });
     if (client.readyState === WebSocket.OPEN) client.close();
   });
@@ -223,6 +239,11 @@ function attachSession(client) {
     if (closed) return;
     if (isBinary) {
       const chunk = Buffer.from(data);
+      audioBytes += chunk.length;
+      if (!loggedFirstAudio) {
+        loggedFirstAudio = true;
+        console.log(`[${sessionId}] first audio chunk (${chunk.length} bytes)`);
+      }
       if (upstreamReady && upstream.readyState === WebSocket.OPEN) {
         upstream.send(chunk);
       } else {
@@ -244,6 +265,7 @@ function attachSession(client) {
     }
 
     if (message.type === "finalize") {
+      console.log(`[${sessionId}] finalize after ${audioBytes} audio bytes`);
       const payload = JSON.stringify({ type: "finalize" });
       if (upstreamReady && upstream.readyState === WebSocket.OPEN) upstream.send(payload);
       else controlQueue.push(payload);

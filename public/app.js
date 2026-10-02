@@ -1,6 +1,11 @@
 const talkButton = document.querySelector("#talk");
 const statusEl = document.querySelector("#status");
+const statusTextEl = document.querySelector("#status-text");
 const rawEl = document.querySelector("#raw");
+const liveEl = document.querySelector("#live");
+const levelEl = document.querySelector("#level");
+const liveFinalEl = document.querySelector("#live-final");
+const liveInterimEl = document.querySelector("#live-interim");
 const matchesEl = document.querySelector("#matches");
 const germanEl = document.querySelector("#german");
 const textForm = document.querySelector("#text-form");
@@ -12,9 +17,41 @@ let active = false;
 let starting = false;
 let cancelStart = false;
 let connecting = null;
+let liveChunks = [];
+let micGranted = false;
 
-function setStatus(text) {
-  statusEl.textContent = text;
+function renderLive(interim = "") {
+  const finalText = liveChunks.join(" ");
+  liveFinalEl.textContent = finalText;
+  liveInterimEl.textContent = interim ? (finalText ? " " : "") + interim : "";
+  liveEl.classList.toggle("has-text", Boolean(finalText || interim));
+}
+
+function resetLive() {
+  liveChunks = [];
+  renderLive();
+}
+
+// Partial events arrive in three flavours: interim (text may still change),
+// chunk final (locked, roughly 3 s of speech) and utterance final (whole stitched utterance).
+function handlePartial({ text, isFinal, speechFinal }) {
+  if (speechFinal) {
+    liveChunks = text ? [text] : [];
+    renderLive();
+    return;
+  }
+  if (isFinal) {
+    if (text) liveChunks.push(text);
+    renderLive();
+    return;
+  }
+  renderLive(text);
+}
+
+// state: idle | busy | listening | done | error
+function setStatus(text, state = "idle") {
+  statusTextEl.textContent = text;
+  statusEl.dataset.state = state;
 }
 
 function clearOutput() {
@@ -75,24 +112,28 @@ function ensureSocket() {
         return;
       }
 
-      if (message.type === "partial" && active) {
-        rawEl.textContent = message.text || "…";
+      if (message.type === "partial") {
+        handlePartial(message);
+        if (message.speechFinal && !message.text?.trim()) {
+          setStatus("Nichts verstanden. Bitte nochmals sprechen.", "idle");
+        }
         return;
       }
 
       if (message.type === "utterance") {
         showResult(message);
-        setStatus(message.german ? "Fertig" : "Schreibe um…");
+        if (message.german) setStatus("Fertig", "done");
+        else setStatus("Schreibe um…", "busy");
         return;
       }
 
       if (message.type === "error") {
-        setStatus(message.message);
+        setStatus(message.message, "error");
         return;
       }
 
       if (message.type === "status" && message.state === "ready" && active) {
-        setStatus("Sprich jetzt");
+        setStatus("Sprich jetzt", "listening");
       }
     });
   });
@@ -100,17 +141,70 @@ function ensureSocket() {
   return connecting;
 }
 
+const MIC_CONSTRAINTS = {
+  audio: { channelCount: 1, echoCancellation: true, noiseSuppression: true },
+  video: false,
+};
+
+function describeMicError(error) {
+  switch (error?.name) {
+    case "NotAllowedError":
+    case "SecurityError":
+      return "Mikrofon-Zugriff verweigert. Bitte in den Browser-Einstellungen für diese Seite erlauben.";
+    case "NotFoundError":
+    case "OverconstrainedError":
+      return "Kein Mikrofon gefunden.";
+    case "NotReadableError":
+      return "Mikrofon ist belegt oder vom System blockiert (macOS: Systemeinstellungen → Datenschutz → Mikrofon).";
+    default:
+      return error?.message || "Mikrofon nicht verfügbar";
+  }
+}
+
+async function micPermissionState() {
+  if (!navigator.permissions?.query) return "unknown";
+  try {
+    const result = await navigator.permissions.query({ name: "microphone" });
+    return result.state;
+  } catch {
+    return "unknown";
+  }
+}
+
+// Ask once for permission without starting a session. While the browser prompt is
+// open the user has to release the button, which would otherwise cancel the recording.
+async function requestMicPermission() {
+  const stream = await navigator.mediaDevices.getUserMedia(MIC_CONSTRAINTS);
+  for (const track of stream.getTracks()) track.stop();
+}
+
+function setLevel(value) {
+  levelEl.style.setProperty("--level", String(Math.min(1, value * 4)));
+}
+
 async function startMic() {
-  const stream = await navigator.mediaDevices.getUserMedia({
-    audio: { channelCount: 1, echoCancellation: true, noiseSuppression: true },
-    video: false,
-  });
+  if (!navigator.mediaDevices?.getUserMedia) {
+    throw new Error("Dieser Browser gibt kein Mikrofon frei (https oder localhost nötig).");
+  }
+  const stream = await navigator.mediaDevices.getUserMedia(MIC_CONSTRAINTS);
   const context = new AudioContext();
   await context.audioWorklet.addModule("/pcm-worklet.js");
   const source = context.createMediaStreamSource(stream);
   const worklet = new AudioWorkletNode(context, "pcm-processor");
+  worklet.onprocessorerror = () => setStatus("Audio-Verarbeitung abgebrochen", "error");
   worklet.port.onmessage = (event) => {
-    if (socket?.readyState === WebSocket.OPEN) socket.send(event.data);
+    const message = event.data;
+    if (message?.type === "level") {
+      setLevel(message.value);
+      return;
+    }
+    if (message?.type === "error") {
+      setStatus(`Audio-Fehler: ${message.message}`, "error");
+      return;
+    }
+    if (message?.type === "audio" && socket?.readyState === WebSocket.OPEN) {
+      socket.send(message.buffer);
+    }
   };
   const silent = context.createGain();
   silent.gain.value = 0;
@@ -122,6 +216,7 @@ async function startMic() {
 }
 
 function stopMic() {
+  setLevel(0);
   if (!audio) return;
   audio.worklet.port.onmessage = null;
   audio.source.disconnect();
@@ -132,13 +227,16 @@ function stopMic() {
 }
 
 function finishUtterance() {
+  const wasActive = active;
   active = false;
   talkButton.classList.remove("live");
   talkButton.textContent = "Halten und sprechen";
   stopMic();
-  if (socket?.readyState === WebSocket.OPEN) {
+  if (wasActive && socket?.readyState === WebSocket.OPEN) {
     socket.send(JSON.stringify({ type: "finalize" }));
-    setStatus("Schreibe um…");
+    setStatus("Schreibe um…", "busy");
+  } else {
+    setStatus("Bereit");
   }
 }
 
@@ -146,15 +244,25 @@ async function press() {
   if (active || starting) return;
   starting = true;
   cancelStart = false;
-  setStatus("Verbinde…");
 
   try {
+    const permission = await micPermissionState();
+    if (permission === "prompt" || (permission === "unknown" && !micGranted)) {
+      setStatus("Bitte Mikrofon-Zugriff erlauben…", "busy");
+      await requestMicPermission();
+      micGranted = true;
+      setStatus("Mikrofon freigegeben. Taste nochmals halten und sprechen.", "done");
+      return;
+    }
+
+    setStatus("Verbinde…", "busy");
     await ensureSocket();
     if (cancelStart) {
       finishUtterance();
       return;
     }
     await startMic();
+    micGranted = true;
     if (cancelStart) {
       finishUtterance();
       return;
@@ -162,12 +270,13 @@ async function press() {
     active = true;
     talkButton.classList.add("live");
     talkButton.textContent = "Loslassen zum Beenden";
-    setStatus("Sprich jetzt");
+    setStatus("Sprich jetzt", "listening");
     clearOutput();
+    resetLive();
   } catch (error) {
     stopMic();
     active = false;
-    setStatus(error.message || "Mikrofon nicht verfügbar");
+    setStatus(describeMicError(error), "error");
   } finally {
     starting = false;
   }
@@ -180,7 +289,11 @@ function release() {
 
 talkButton.addEventListener("pointerdown", (event) => {
   event.preventDefault();
-  talkButton.setPointerCapture(event.pointerId);
+  try {
+    talkButton.setPointerCapture(event.pointerId);
+  } catch {
+    // Pointer capture is a nicety; keep going without it.
+  }
   press();
 });
 
@@ -201,7 +314,7 @@ textForm.addEventListener("submit", async (event) => {
 
   const submit = textForm.querySelector("button");
   submit.disabled = true;
-  setStatus("Schreibe um…");
+  setStatus("Schreibe um…", "busy");
   rawEl.textContent = text;
   germanEl.textContent = "Schreibe um…";
   germanEl.classList.add("pending");
@@ -215,11 +328,11 @@ textForm.addEventListener("submit", async (event) => {
     const body = await response.json();
     if (!response.ok) throw new Error(body.error || "Umschreibung fehlgeschlagen");
     showResult(body);
-    setStatus("Fertig");
+    setStatus("Fertig", "done");
   } catch (error) {
     germanEl.textContent = "—";
     germanEl.classList.remove("pending");
-    setStatus(error.message || "Umschreibung fehlgeschlagen");
+    setStatus(error.message || "Umschreibung fehlgeschlagen", "error");
   } finally {
     submit.disabled = false;
   }

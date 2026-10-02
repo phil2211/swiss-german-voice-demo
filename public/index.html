@@ -18,7 +18,16 @@
       </header>
 
       <button id="talk" type="button">Halten und sprechen</button>
-      <p id="status" role="status">Bereit</p>
+      <p id="status" role="status" data-state="idle">
+        <span class="indicator" aria-hidden="true"></span>
+        <span id="status-text">Bereit</span>
+        <span id="level" aria-hidden="true" title="Mikrofonpegel"></span>
+      </p>
+
+      <section>
+        <h2>Live</h2>
+        <p id="live" class="panel live" aria-live="polite"><span id="live-final"></span><span id="live-interim"></span><span id="live-placeholder">Hier erscheint, was die API gerade hört.</span></p>
+      </section>
 
       <section>
         <h2>Transkript</h2>
